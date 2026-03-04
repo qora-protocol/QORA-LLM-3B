@@ -1,24 +1,147 @@
+---
+language:
+  - en
+  - fr
+  - es
+  - de
+  - it
+  - pt
+  - ar
+  - zh
+  - ru
+license: apache-2.0
+tags:
+  - rust
+  - cpu-inference
+  - gpu-inference
+  - quantized
+  - q4
+  - text-generation
+  - smollm3
+  - pure-rust
+  - no-python
+  - vulkan
+base_model: HuggingFaceTB/SmolLM3-3B
+library_name: qora
+pipeline_tag: text-generation
+model-index:
+  - name: QORA-LLM
+    results:
+      - task:
+          type: text-generation
+        dataset:
+          name: HellaSwag
+          type: hellaswag
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 76.15
+      - task:
+          type: text-generation
+        dataset:
+          name: ARC-Challenge
+          type: arc_challenge
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 65.61
+      - task:
+          type: text-generation
+        dataset:
+          name: BoolQ
+          type: boolq
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 78.99
+      - task:
+          type: text-generation
+        dataset:
+          name: MMLU
+          type: mmlu
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 44.13
+      - task:
+          type: text-generation
+        dataset:
+          name: GSM8K
+          type: gsm8k
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 67.63
+      - task:
+          type: text-generation
+        dataset:
+          name: HumanEval+
+          type: humaneval
+        metrics:
+          - name: pass@1
+            type: pass@1
+            value: 30.48
+      - task:
+          type: text-generation
+        dataset:
+          name: MATH
+          type: math
+        metrics:
+          - name: Accuracy
+            type: accuracy
+            value: 46.10
+---
+
 # QORA - Native Rust LLM Inference Engine
 
 <img width="1395" height="926" alt="Screenshot 2026-02-27 174517" src="https://github.com/user-attachments/assets/b02d0a77-bf76-40fd-b61e-bb19dc868d88" />
 
-## Downlod 🤗: https://huggingface.co/qoranet/QORA-LLM
+## Downlod: https://huggingface.co/qoranet/QORA-LLM
 
 Pure Rust inference engine for the SmolLM3-3B language model. No Python runtime, no CUDA, no external dependencies. Single executable + quantized weights = portable AI on any machine.
+
+**Now with GPU acceleration!** Auto-detects Vulkan-compatible GPUs for ~4.8x faster inference, with intelligent fallback to CPU.
 
 ## Overview
 
 | Property | Value |
 |----------|-------|
 | **Engine** | QORA (Pure Rust) |
-
 | **Base Model** | SmolLM3-3B (HuggingFaceTB/SmolLM3-3B) |
 | **Parameters** | 3.07 Billion |
 | **Quantization** | Q4 (4-bit symmetric, group_size=32) |
 | **Model Size** | 1.68 GB (Q4) / ~6 GB (F16) |
-| **Executable** | 6.7 MB |
+| **Executable** | ~37 MB (GPU+CPU) / ~7 MB (CPU-only) |
 | **Context Length** | 65,536 tokens (up to 128K with YARN) |
-| **Platform** | Windows x86_64 (CPU-only) |
+| **Platform** | Windows x86_64 (GPU auto-detect + CPU fallback) |
+| **GPU Backend** | Vulkan (via Burn wgpu) |
+
+## GPU Acceleration
+
+QORA automatically detects Vulkan-compatible GPUs and uses them for inference. If no GPU is available or VRAM is insufficient, it falls back to CPU seamlessly.
+
+### GPU Requirements
+
+| Requirement | Value |
+|-------------|-------|
+| **Minimum VRAM** | ~2.5 GB (Q4 weights + KV cache + activations) |
+| **GPU API** | Vulkan 1.1+ |
+| **Tested On** | GTX 1660 SUPER (6 GB VRAM) |
+
+### GPU Performance
+
+| Metric | GPU | CPU | Speedup |
+|--------|-----|-----|---------|
+| **Decode Speed** | ~4.1 tok/s | ~0.86 tok/s | **~4.8x** |
+| **VRAM Usage** | ~2.3 GB | — | — |
+
+### VRAM Safety
+
+QORA includes intelligent VRAM management:
+- **Pre-flight check**: Probes GPU with a 256 MB test allocation before loading the full model
+- **Estimated VRAM**: Prints estimated VRAM requirement before loading
+- **Panic recovery**: If the GPU runs out of memory during inference, catches the error and falls back to CPU
+- **Manual override**: Use `--cpu` flag to skip GPU and run on CPU directly
 
 ## Architecture
 
@@ -46,23 +169,42 @@ SmolLM3 uses a 3:1 NoPE ratio — 75% of layers have **no positional encoding** 
 
 ```
 model/
-  qora.exe          — 6.7 MB    Inference engine (single binary)
+  qora.exe          — ~37 MB    Inference engine (GPU+CPU, single binary)
   model.qora        — 1.68 GB   Q4 quantized weights (4-bit)
   tokenizer.json    — 16.4 MB   Tokenizer vocabulary
+  config.json       — 540 B     Model configuration
   README.md         — This file
 ```
+
+## Quick Start
+
+For the **fastest results**, use `--no-think --greedy`:
+
+```bash
+.\qora.exe --load model.qora --prompt "What is X?" --no-think --greedy
+```
+
+This skips the thinking phase and uses deterministic decoding — you get a direct answer immediately.
+
+> **Tip:** Think mode produces better answers for complex questions (math, coding, reasoning) but uses 100-300+ tokens just for thinking before the answer appears. For simple factual questions, `--no-think` is much faster.
 
 ## Usage
 
 ```bash
-# Basic chat (with thinking mode)
-qora.exe --load model.qora --prompt "What is photosynthesis?"
+# Fastest: direct answer, no thinking, deterministic
+qora.exe --load model.qora --prompt "What is the capital of France?" --no-think --greedy
 
-# Direct answer (no thinking)
-qora.exe --load model.qora --prompt "What is the capital of France?" --no-think
+# Fast: direct answer with some randomness
+qora.exe --load model.qora --prompt "Tell me about Mars" --no-think
 
-# Greedy decoding (deterministic)
-qora.exe --load model.qora --prompt "Write hello world in Python" --greedy --no-think
+# Full quality: thinking mode (slower but better for complex questions)
+qora.exe --load model.qora --prompt "Solve: if x^2 + 3x = 10, what is x?" --max-tokens 1024
+
+# See what the model is thinking
+qora.exe --load model.qora --prompt "What is 2+2?" --show-think
+
+# Force CPU (skip GPU auto-detect)
+qora.exe --load model.qora --prompt "Hello" --cpu
 
 # Control output length
 qora.exe --load model.qora --prompt "Tell me a story" --max-tokens 512
@@ -75,30 +217,41 @@ qora.exe --load model.qora --prompt "Once upon a time" --raw --max-tokens 128
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--load <path>` | — | Load from .qora binary (fast, ~2s) |
+| `--load <path>` | — | Load from .qora binary (fast, ~2-5s) |
 | `--model-path <path>` | `.` | Path to safetensors model directory |
 | `--prompt <text>` | "Hello, how are you?" | Input prompt |
-| `--max-tokens <n>` | 256 | Maximum tokens to generate |
-| `--no-think` | off | Disable reasoning/thinking mode |
-| `--greedy` | off | Greedy decoding (temperature=0) |
+| `--max-tokens <n>` | 1024 | Maximum tokens to generate |
+| `--no-think` | off | Disable thinking mode (faster, direct answers) |
+| `--greedy` | off | Greedy decoding (temperature=0, deterministic) |
+| `--show-think` | off | Display thinking content on stderr |
 | `--raw` | off | Raw text completion (no chat template) |
 | `--f16` | off | Use F16 weights instead of Q4 |
+| `--cpu` | off | Force CPU inference (skip GPU auto-detect) |
 | `--save <path>` | — | Save model as .qora binary |
+
+### Speed Tips
+
+| Mode | Speed (GPU) | Speed (CPU) | Best For |
+|------|-------------|-------------|----------|
+| `--no-think --greedy` | ~4.1 tok/s | ~1 tok/s | Fastest. Simple factual questions. |
+| `--no-think` | ~4.1 tok/s | ~1 tok/s | Fast with variety. General questions. |
+| `--show-think` | ~4.1 tok/s | ~1 tok/s | See reasoning. Complex questions. |
+| *(default think mode)* | ~4.1 tok/s | ~1 tok/s | Best quality but thinking uses 100-300+ tokens before answer appears. |
 
 ## Performance Benchmarks
 
-**Test Hardware:** Windows 11, CPU-only (no GPU acceleration)
-
 ### Inference Speed
 
-| Metric | Value |
-|--------|-------|
-| **Model Load (binary)** | ~2-5s (single instance) |
-| **Prefill Speed** | ~0.5 tok/s (123 tokens in ~270s) |
-| **Decode Speed (warm)** | ~3.7s per token (single decode) |
-| **Decode Throughput** | 0.20-0.29 tok/s (sustained generation) |
-| **Memory (Q4)** | 1,681 MB |
-| **Memory (F16)** | ~6,000 MB |
+Tested on i5-11500 (6C/12T, AVX-512), 16GB RAM, GTX 1660 SUPER (6GB), Windows 11.
+
+| Metric | GPU | CPU |
+|--------|-----|-----|
+| **Model Load (binary)** | ~3-17s | ~3-17s |
+| **Prefill Speed** | — | ~1.3-2.2 tok/s |
+| **Decode Speed** | ~4.1 tok/s | ~1.1 tok/s |
+| **Single Decode Step** | ~244ms | ~830ms |
+| **Memory (Q4)** | ~2.3 GB VRAM | 1,681 MB RAM |
+| **Memory (F16)** | ~6 GB VRAM | ~6,000 MB RAM |
 
 ### Quality Test Results
 
@@ -179,7 +332,6 @@ def is_prime(n):
             return False
     return True
 ```
-
 
 | Metric | Value |
 |--------|-------|
@@ -350,6 +502,15 @@ Official scores from the HuggingFace model card. QORA runs the same weights with
 
 ## Technical Details
 
+### GPU Inference
+
+QORA uses the Burn framework's wgpu backend with Vulkan for GPU acceleration:
+
+- **Q4 on GPU**: Weights are uploaded as Burn quantized tensors (Q4S + PackedU32). Matmul performs on-the-fly dequantization on the GPU — no need to decompress the full model into VRAM.
+- **KV Cache**: Stored as f32 tensors on GPU, concatenated each step.
+- **Sampling**: Logits are transferred to CPU for top-p/temperature sampling.
+- **128MB stack thread**: GPU inference runs in a dedicated thread with 128MB stack to handle Burn's deep lazy computation graphs.
+
 ### Quantization
 
 QORA uses symmetric 4-bit quantization with group_size=32:
@@ -362,14 +523,16 @@ QORA uses symmetric 4-bit quantization with group_size=32:
 
 ```
 1. Model Load    — Read .qora binary (Q4 weights + f16 norms)
-2. Tokenize      — Encode prompt with chat template
-3. Prefill       — Process full prompt through 36 layers (batched)
-4. Decode Loop   — Generate tokens one at a time:
+2. GPU Detect    — Probe Vulkan GPU, check VRAM, fallback to CPU if needed
+3. Upload        — Transfer Q4 weights to GPU (or keep on CPU)
+4. Tokenize      — Encode prompt with chat template
+5. Prefill       — Process full prompt through 36 layers (batched)
+6. Decode Loop   — Generate tokens one at a time:
    a. Embedding lookup
    b. 36x: RMSNorm -> Attention (GQA, KV cache) -> RMSNorm -> SwiGLU MLP
    c. Final RMSNorm -> LM head (tied weights)
    d. Sample (top-p, temperature)
-5. Detokenize    — Decode token IDs back to text
+7. Detokenize    — Decode token IDs back to text
 ```
 
 ### Sampling Parameters
@@ -378,7 +541,8 @@ QORA uses symmetric 4-bit quantization with group_size=32:
 |-----------|---------|-------------|
 | Temperature | 0.6 | Controls randomness (0 = greedy) |
 | Top-P | 0.95 | Nucleus sampling threshold |
-| Max Tokens | 256 | Maximum generation length |
+| Repetition Penalty | 1.1 | Discourages repeating recent tokens |
+| Max Tokens | 1024 | Maximum generation length |
 
 ## QORA Model Family
 
@@ -389,13 +553,18 @@ QORA uses symmetric 4-bit quantization with group_size=32:
 | **QORA-Vision (Image)** | SigLIP 2 Base | 86M | 58 MB | Image embeddings, zero-shot classification |
 | **QORA-Vision (Video)** | ViViT Base | 89M | 60 MB | Video action classification (400 classes) |
 
-All engines are pure Rust, CPU-only, single-binary executables with no Python dependencies.
+All engines are pure Rust, single-binary executables with no Python dependencies. QORA supports GPU acceleration via Vulkan with automatic CPU fallback.
 
 ## Building from Source
 
 ```bash
 cd QOR3B
+
+# CPU-only build
 cargo build --release
+
+# GPU-enabled build (Vulkan)
+cargo build --release --features gpu
 
 # Convert from safetensors to .qora binary:
 ./target/release/qora.exe --model-path ../SmolLM3-3B/ --save model/model.qora
@@ -403,7 +572,8 @@ cargo build --release
 
 ### Dependencies
 
-- `burn` — Rust deep learning framework (for initial weight loading)
+- `burn` — Rust deep learning framework (GPU via wgpu/Vulkan backend)
+- `rayon` — Thread pool for parallel GEMV, attention, and lm_head
 - `half` — F16 support
 - `serde` / `serde_json` — Config parsing
 - `safetensors` — HuggingFace weight format

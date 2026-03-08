@@ -113,8 +113,9 @@ Pure Rust inference engine for the SmolLM3-3B language model. No Python runtime,
 | **Model Size** | 1.68 GB (Q4) / ~6 GB (F16) |
 | **Executable** | ~37 MB (GPU+CPU) / ~7 MB (CPU-only) |
 | **Context Length** | 65,536 tokens (up to 128K with YARN) |
-| **Platform** | Windows x86_64 (GPU auto-detect + CPU fallback) |
-| **GPU Backend** | Vulkan (via Burn wgpu) |
+| **Platform** | Windows x86_64, Linux x86_64, macOS aarch64 |
+| **GPU Backend** | Vulkan (Windows/Linux) / Metal (macOS) — auto-detect with CPU fallback |
+| **System Intelligence** | Auto-detects RAM, adjusts token limits, sentence-boundary clean stop |
 
 ## GPU Acceleration
 
@@ -125,7 +126,7 @@ QORA automatically detects Vulkan-compatible GPUs and uses them for inference. I
 | Requirement | Value |
 |-------------|-------|
 | **Minimum VRAM** | ~2.5 GB (Q4 weights + KV cache + activations) |
-| **GPU API** | Vulkan 1.1+ |
+| **GPU API** | Vulkan 1.1+ (Windows/Linux) or Metal (macOS) |
 | **Tested On** | GTX 1660 SUPER (6 GB VRAM) |
 
 ### GPU Performance
@@ -217,17 +218,15 @@ qora.exe --load model.qora --prompt "Once upon a time" --raw --max-tokens 128
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--load <path>` | — | Load from .qora binary (fast, ~2-5s) |
-| `--model-path <path>` | `.` | Path to safetensors model directory |
+| `--load <path>` | `model.qora` | Load from .qor3b binary (fast, ~2-5s) |
 | `--prompt <text>` | "Hello, how are you?" | Input prompt |
-| `--max-tokens <n>` | 1024 | Maximum tokens to generate |
+| `--max-tokens <n>` | auto (smart) | Maximum tokens to generate (auto-adjusted by RAM) |
+| `--think-budget <n>` | auto (smart) | Maximum thinking tokens before forcing `</think>` |
 | `--no-think` | off | Disable thinking mode (faster, direct answers) |
 | `--greedy` | off | Greedy decoding (temperature=0, deterministic) |
 | `--show-think` | off | Display thinking content on stderr |
 | `--raw` | off | Raw text completion (no chat template) |
-| `--f16` | off | Use F16 weights instead of Q4 |
 | `--cpu` | off | Force CPU inference (skip GPU auto-detect) |
-| `--save <path>` | — | Save model as .qora binary |
 
 ### Speed Tips
 
@@ -504,7 +503,7 @@ Official scores from the HuggingFace model card. QORA runs the same weights with
 
 ### GPU Inference
 
-QORA uses the Burn framework's wgpu backend with Vulkan for GPU acceleration:
+QORA uses the Cortex framework's wgpu backend for GPU acceleration (Vulkan on Windows/Linux, Metal on macOS):
 
 - **Q4 on GPU**: Weights are uploaded as Burn quantized tensors (Q4S + PackedU32). Matmul performs on-the-fly dequantization on the GPU — no need to decompress the full model into VRAM.
 - **KV Cache**: Stored as f32 tensors on GPU, concatenated each step.
@@ -539,45 +538,77 @@ QORA uses symmetric 4-bit quantization with group_size=32:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Temperature | 0.6 | Controls randomness (0 = greedy) |
+| Temperature | 0.6 (think) / 0.7 (no-think) | Controls randomness (0 = greedy) |
+| Top-K | 20 | Keep only top 20 candidates before nucleus sampling |
 | Top-P | 0.95 | Nucleus sampling threshold |
-| Repetition Penalty | 1.1 | Discourages repeating recent tokens |
-| Max Tokens | 1024 | Maximum generation length |
+| Repetition Penalty | 1.1 | Discourages repeating recent tokens (window=64) |
+| Presence Penalty | 1.5 | Flat subtraction for any previously-seen token |
+| Max Tokens | auto (RAM-based) | Maximum generation length |
+| Think Budget | auto (RAM-based) | Maximum thinking tokens |
+
+### System Intelligence
+
+QORA automatically detects your system resources and adjusts parameters:
+
+| Available RAM | Max Tokens | Think Budget | Note |
+|---------------|-----------|--------------|------|
+| < 4 GB | 512 | 256 | Very low RAM warning |
+| 4-8 GB | 1024 | 1024 | Low RAM warning |
+| 8-12 GB | 2048 | 2048 | Normal |
+| > 12 GB | 8192 | 8192 | Full capability |
+
+**Smart features:**
+- **RAM detection**: Reads available memory on Windows (wmic), Linux (/proc/meminfo), macOS (sysctl/vm_stat)
+- **Auto token limits**: Defaults adjust based on available RAM — no manual tuning needed
+- **Length-aware prompting**: System prompt includes length hints so the model respects token budget
+- **Sentence-boundary stop**: At 85% of token budget, waits for a sentence ending (`.` `!` `?`) instead of cutting mid-sentence
+- **Loop detection**: Detects repeating token patterns and forces EOS to prevent infinite loops
+- **Think budget enforcement**: Forces `</think>` if thinking exceeds budget, ensuring the model always produces an answer
 
 ## QORA Model Family
 
-| Engine | Model | Params | Size (Q4) | Purpose |
-|--------|-------|--------|-----------|---------|
-| **QORA** | SmolLM3-3B | 3.07B | 1.68 GB | Text generation, reasoning, chat |
-| **QORA-TTS** | Qwen3-TTS | — | — | Text-to-speech synthesis |
-| **QORA-Vision (Image)** | SigLIP 2 Base | 86M | 58 MB | Image embeddings, zero-shot classification |
-| **QORA-Vision (Video)** | ViViT Base | 89M | 60 MB | Video action classification (400 classes) |
+| Engine | Model | Params | Size (Q4) | Purpose | GPU |
+|--------|-------|--------|-----------|---------|-----|
+| **QORA-LLM-3B** | SmolLM3-3B | 3.07B | 1.68 GB | Text generation, reasoning, chat | Vulkan/Metal |
+| **QORA-LLM-4B** | Qwen3.5-4B | 4B | ~2 GB | Multimodal (text + vision), DeltaNet | Vulkan/Metal |
+| **QORA-LLM-0.8B** | Qwen3.5-0.8B | 0.8B | ~600 MB | Lightweight multimodal, mobile target | CPU only |
+| **QORA-Image** | SDXS-512 | — | ~1.5 GB | Text-to-image generation (1-step) | Vulkan/Metal |
+| **QORA-TTS** | Qwen3-TTS-0.6B | 0.6B | ~1.2 GB | Text-to-speech synthesis | CPU only |
+| **QORA-STT** | Whisper-tiny | 39M | 144 MB | Speech-to-text transcription | CPU only |
 
-All engines are pure Rust, single-binary executables with no Python dependencies. QORA supports GPU acceleration via Vulkan with automatic CPU fallback.
+All engines are pure Rust, single-binary executables with no Python dependencies. GPU-enabled engines auto-detect Vulkan (Windows/Linux) or Metal (macOS) with automatic CPU fallback.
 
 ## Building from Source
 
 ```bash
 cd QOR3B
 
-# CPU-only build
+# CPU-only build (all platforms)
 cargo build --release
 
-# GPU-enabled build (Vulkan)
+# GPU build — Windows/Linux (Vulkan)
 cargo build --release --features gpu
 
-# Convert from safetensors to .qora binary:
-./target/release/qora.exe --model-path ../SmolLM3-3B/ --save model/model.qora
+# GPU build — macOS (Metal)
+cargo build --release --features gpu-metal
 ```
 
 ### Dependencies
 
-- `burn` — Rust deep learning framework (GPU via wgpu/Vulkan backend)
+- `cortex` — Rust deep learning framework (GPU via wgpu/Vulkan or Metal backend)
 - `rayon` — Thread pool for parallel GEMV, attention, and lm_head
 - `half` — F16 support
 - `serde` / `serde_json` — Config parsing
-- `safetensors` — HuggingFace weight format
 - `tokenizers` — HuggingFace tokenizer
+
+### Cross-Platform Releases
+
+Pre-built binaries are automatically built via GitHub Actions for:
+- **Windows x86_64** — CPU + GPU (Vulkan)
+- **Linux x86_64** — CPU + GPU (Vulkan)
+- **macOS aarch64** — CPU + GPU (Metal)
+
+Create a git tag (e.g. `v0.1.0`) and push to trigger a release build.
 
 ## License
 

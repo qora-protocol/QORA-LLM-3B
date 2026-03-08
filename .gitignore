@@ -1,4 +1,5 @@
 /target
+/.cargo/
 *.exe
 *.qora
 *.qor3b

@@ -417,6 +417,18 @@ QORA uses the Cortex framework's wgpu backend for GPU acceleration (Vulkan on Wi
 - **Sampling**: Logits are transferred to CPU for top-p/temperature sampling.
 - **128MB stack thread**: GPU inference runs in a dedicated thread with 128MB stack to handle Burn's deep lazy computation graphs.
 
+### AVX-512 SIMD Acceleration
+
+On CPUs with AVX-512 support (Intel 11th gen+, AMD Zen 4+), QORA automatically uses hand-written AVX-512 SIMD kernels for a **~2.5x CPU speedup**:
+
+| Kernel | Technique | Speedup |
+|--------|-----------|---------|
+| **Q4 GEMV** | `permutexvar_ps` 16-entry LUT lookup, nibble extract via `cvtepu8_epi32` | ~2.5x |
+| **F16 GEMV** | `cvtph_ps` f16→f32 + `fmadd_ps` FMA accumulation | ~2.5x |
+| **Fused gate+up** | Parallel gate & up SIMD LUT decode in SwiGLU MLP | ~2.5x |
+
+Detection is automatic at runtime — falls back to scalar code on non-AVX-512 CPUs with zero overhead.
+
 ### Quantization
 
 QORA uses symmetric 4-bit quantization with group_size=32:
